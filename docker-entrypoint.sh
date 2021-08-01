@@ -86,57 +86,66 @@ function configureOpenresty() {
         fi
     fi
 
+    mkdir -p /var/run/openresty
+    chmod 777 /var/run/openresty 
+
 }
 
 function configureApp() {
     # ================================================================================
     # 执行前的准备脚本，部分环境变量
     # ================================================================================
-    mkdir -p /tmp/web/tmp.java
-    # JVM_ARGS_OPTS
-    if [ "${JVM_ARGS_OPTS}" == "" ]; then
-        JVM_ARGS_OPTS="-Djava.io.tmpdir=/tmp/web/tmp.java -Djava.security.egd=file:/dev/./urandom -Duser.timezone=GMT+08"
-        # log "JVM_ARGS_OPTS not provided, default JVM_ARGS_OPTS=${JVM_ARGS_OPTS}."
-    fi
-    # JVM_PERFORMANCE_OPTS
-    if [ "${JVM_PERFORMANCE_OPTS}" == "" ]; then
-        JVM_PERFORMANCE_OPTS="-server -Xms512m -Xmx2048m -XX:PermSize=256m -XX:MaxPermSize=512m"
-        # log "JVM_PERFORMANCE_OPTS not provided, default JVM_PERFORMANCE_OPTS=${JVM_PERFORMANCE_OPTS}."
-    fi
-    # JAVA_OPTS
-    if [ "${JAVA_OPTS}" == "" ]; then
-    # JAVA_OPTS SPRING_PROFILE
-        if [ "${SPRING_PROFILE}" == "" ]; then
-            SPRING_PROFILE="dev"
-            # log "SPRING_PROFILE not provided, default SPRING_PROFILE=${SPRING_PROFILE}"
-        fi
-        JAVA_OPTS="-Dspring.profiles.active=${SPRING_PROFILE}"
-        # log "JAVA_OPTS not provided, default JAVA_OPTS=${JAVA_OPTS}"
-    fi
-    # DIST_JAR
-    if [ "${DIST_JAR}" == "" ]; then
-        DIST_JAR=/opt/app.jar
-    fi
-    # APP_ARGS
-    if [ "${APP_ARGS}" == "" ]; then
-        APP_ARGS=""
-        # log "APP_ARGS not provided, default APP_ARGS=${APP_ARGS}"
+    # DIST_APP
+    DIST_APP="${DIST_JAR:-/opt/app.jar}"
+    DIST_APP_ARGS="${APP_ARGS:""}"
+
+    if [ ! -f ${DIST_APP} ]; then
+        export FAIL_RUN_DIST_APP="The DIST_APP File ${DIST_APP} not found!"
+        # log ${FAIL_RUN_DIST_APP}
+    else
+        # Java 变量后缀 如果是java的jar文件
+        if [ ${DIST_APP##*.} == "jar" ]; then
+
+            mkdir -p /tmp/web/tmp.java
+            # JVM_ARGS_OPTS 默认值
+            DEFAULT_JVM_ARGS_OPTS="-Djava.io.tmpdir=/tmp/web/tmp.java -Djava.security.egd=file:/dev/./urandom -Duser.timezone=GMT+08"
+            # JVM_PERFORMANCE_OPTS 默认值
+            DEFAULT_JVM_PERFORMANCE_OPTS="-server -Xms512m -Xmx2048m -XX:PermSize=256m -XX:MaxPermSize=512m"
+            # SPRING_PROFILE 默认值
+            DEFAULT_SPRING_PROFILE="dev"
+            # JAVA_OPTS 默认值
+            DEFAULT_JAVA_OPTS="-Dspring.profiles.active=${SPRING_PROFILE:-${DEFAULT_SPRING_PROFILE}}"
+
+            # 外部传入
+            JVM_ARGS_OPTS="${JVM_ARGS_OPTS:-${DEFAULT_JVM_ARGS_OPTS}}"
+            JVM_PERFORMANCE_OPTS="${JVM_PERFORMANCE_OPTS:-${DEFAULT_JVM_PERFORMANCE_OPTS}}"
+            JAVA_OPTS="${JAVA_OPTS:-${DEFAULT_JAVA_OPTS}}"
+            #
+            JAVA_HOME="${JAVA_HOME:-/opt/jdk}"
+            JAVA_EXEC="${JAVA_EXEC:-${JAVA_HOME}/bin/java}"
+            #
+            JAVA_ENV_ARGS="${JAVA_ENV_ARGS:-${JVM_ARGS_OPTS} ${JVM_PERFORMANCE_OPTS} ${JAVA_OPTS}}"
+
+            # DIST_APP_ARGS
+            DIST_APP_ARGS="${DIST_APP_ARGS:-${JAVA_ENV_ARGS}}"
+
+            # 传出变量
+            export DIST_APP_COMMAND=${DIST_APP_COMMAND:-${JAVA_EXEC} -jar ${DIST_APP} ${DIST_APP_ARGS} }
+            log "cmd: ${DIST_APP_COMMAND}"
+
+        # Python 变量后缀 如果是Python的py文件
+        elif [ ${DIST_APP##*.} == "py" ]; then
+            log "DIST_APP: ${DIST_APP} not support!" 
+
+        # 其他文件
+        else
+            # 传出变量
+            export DIST_APP_COMMAND=${DIST_APP_COMMAND:-${DIST_APP} ${DIST_APP_ARGS} }
+            log "cmd: ${DIST_APP_COMMAND}"
+        fi 
     fi
 
-    export DIST_JAR_ARGS=${DIST_JAR_ARGS:-${JVM_ARGS_OPTS} ${JVM_PERFORMANCE_OPTS} ${JAVA_OPTS} -jar ${DIST_JAR} ${APP_ARGS}}
-    log "args: ${DIST_JAR_ARGS}"
 
-    export FAIL_RUN_DIST_JAR=0
-
-    if [ "${DIST_JAR}" == "" ] || [ ! -f ${DIST_JAR} ]; then
-        log "The File ${DIST_JAR} not found!"
-        export FAIL_RUN_DIST_JAR=1
-    fi
-
-    if [ ${FAIL_RUN_DIST_JAR} != 1 ]; then
-        log "exec java ${DIST_JAR_ARGS}"
-
-    fi
 
 }
 
@@ -151,8 +160,13 @@ function configureTomcat() {
 
 
 function configureSupervisor() {
-
-    mkdir -p /etc/supervisord.d/ \
+    # /etc/
+    export SUPERVISORD_CONF_PATH=${SUPERVISORD_CONF_PATH:-/etc}
+    # /etc/supervisord.d
+    export SUPERVISORD_CONF_D_PATH=${SUPERVISORD_CONF_D_PATH:-"${SUPERVISORD_CONF_PATH}/supervisord.d"}
+    # log "SUPERVISORD_CONF_PATH: ${SUPERVISORD_CONF_PATH}"
+    # log "SUPERVISORD_CONF_D_PATH: ${SUPERVISORD_CONF_D_PATH}"
+    mkdir -p ${SUPERVISORD_CONF_D_PATH} \
     &&  { \
             echo '[unix_http_server]'; \
             echo 'file=/var/run/supervisor.sock'; \
@@ -181,25 +195,24 @@ function configureSupervisor() {
             echo 'password=admin123'; \
             echo ''; \
             echo '[include]'; \
-            echo 'files = /etc/supervisord.d/*.ini'; \
+            echo "files = "${SUPERVISORD_CONF_D_PATH}"/*.ini"; \
             echo ''; \
-        } | tee /etc/supervisord.conf >/dev/null 2>&1 \
+        } | tee ${SUPERVISORD_CONF_PATH}/supervisord.conf.bak >/dev/null 2>&1 \
 
     #---------------------------------------------------------------------------------------------------------
 
     # 取消控制台输出
-    # CONFGURE_NGINX_FILE=/usr/local/openresty/nginx/conf
-    # CONFGURE_NGINX_FILE=/opt/nginx/conf
-    mkdir -p /var/run/openresty
-    chmod 777 /var/run/openresty 
     ln -sf /dev/stdout /tmp/nginx_access.log
     ln -sf /dev/stderr /tmp/nginx_error.log
 
     NGX_CONFIGURE_PATH=${NGX_CONFIGURE_PATH:-/usr/local/openresty/nginx/conf}
+
+    COMMAND="/usr/local/openresty/bin/openresty -c $NGX_CONFIGURE_PATH/nginx.conf -g 'daemon off;' "
+
     # supervisor openresty 定义文件
     { \
         echo '[program: openresty]'; \
-        echo "command=/usr/local/openresty/bin/openresty -c $NGX_CONFIGURE_PATH/nginx.conf -g 'daemon off;' "; \
+        echo "command="${COMMAND}; \
         echo 'autorestart=true'; \
         echo 'autostart=true'; \
         echo 'killasgroup=true'; \
@@ -218,18 +231,20 @@ function configureSupervisor() {
             echo 'stderr_logfile_maxbytes=0'; \
         fi
         echo ''; \
-    } | tee /etc/supervisord.d/openresty.ini.bak >/dev/null 2>&1 \
+    } | tee ${SUPERVISORD_CONF_D_PATH}/openresty.ini.bak >/dev/null 2>&1 \
 
 
     #---------------------------------------------------------------------------------------------------------
     
     ln -sf /dev/stdout /tmp/tomcat_stdout.log
     ln -sf /dev/stderr /tmp/tomcat_stderr.log
+    
+    COMMAND="/opt/tomcat/bin/catalina.sh ${CATALINA_SH_ARGS:-run}"
 
     # supervisor tomcat 定义文件
     { \
         echo '[program: tomcat]'; \
-        echo "command=/opt/tomcat/bin/catalina.sh " ${CATALINA_SH_ARGS:-run}; \
+        echo "command="${COMMAND}; \
         echo 'autorestart=true'; \
         echo 'autostart=true'; \
         echo 'killasgroup=true'; \
@@ -248,7 +263,7 @@ function configureSupervisor() {
             echo 'stderr_logfile_maxbytes=0'; \
         fi
         echo ''; \
-    } | tee /etc/supervisord.d/tomcat.ini.bak >/dev/null 2>&1 \
+    } | tee ${SUPERVISORD_CONF_D_PATH}/tomcat.ini.bak >/dev/null 2>&1 \
 
 
     #---------------------------------------------------------------------------------------------------------
@@ -256,10 +271,12 @@ function configureSupervisor() {
     ln -sf /dev/stdout /tmp/app_stdout.log
     ln -sf /dev/stderr /tmp/app_stderr.log
 
+    COMMAND=${DIST_APP_COMMAND:-}
+
     # supervisor app 定义文件
     { \
         echo '[program: app]'; \
-        echo "command=/opt/jdk/bin/java " ${DIST_JAR_ARGS:-}; \
+        echo "command="${COMMAND:-}; \
         echo 'autorestart=true'; \
         echo 'autostart=true'; \
         echo 'killasgroup=true'; \
@@ -278,7 +295,9 @@ function configureSupervisor() {
             echo 'stderr_logfile_maxbytes=0'; \
         fi
         echo ''; \
-    } | tee /etc/supervisord.d/app.ini.bak >/dev/null 2>&1 \
+    } | tee ${SUPERVISORD_CONF_D_PATH}/app.ini.bak >/dev/null 2>&1 \
+
+    #---------------------------------------------------------------------------------------------------------
 
 
 }
@@ -295,17 +314,18 @@ function runSupervisor() {
     #
     configureSupervisor
     #
-    cp /etc/supervisord.d/openresty.ini.bak /etc/supervisord.d/openresty.ini
+    cp ${SUPERVISORD_CONF_PATH}/supervisord.conf.bak ${SUPERVISORD_CONF_PATH}/supervisord.conf
     #
-    if [ ${FAIL_RUN_DIST_JAR} != 1 ]; then
-        cp /etc/supervisord.d/app.ini.bak /etc/supervisord.d/app.ini
+    cp ${SUPERVISORD_CONF_D_PATH}/openresty.ini.bak  ${SUPERVISORD_CONF_D_PATH}/openresty.ini
+    #
+    if [ "${FAIL_RUN_DIST_APP}" == "" ]; then
+        cp ${SUPERVISORD_CONF_D_PATH}/app.ini.bak ${SUPERVISORD_CONF_D_PATH}/app.ini
+    else
+        cp ${SUPERVISORD_CONF_D_PATH}/tomcat.ini.bak ${SUPERVISORD_CONF_D_PATH}/tomcat.ini
+        log "runApp Failure, then runTomcat starts automatically. Cause By: ${FAIL_RUN_DIST_APP}"
     fi
     #
-    if [ ${FAIL_RUN_DIST_JAR} == 1 ]; then
-        cp /etc/supervisord.d/tomcat.ini.bak /etc/supervisord.d/tomcat.ini
-    fi
-    #
-    /usr/bin/supervisord -c /etc/supervisord.conf -n
+    /usr/bin/supervisord -c ${SUPERVISORD_CONF_PATH}/supervisord.conf -n
 }
 
 
@@ -318,11 +338,12 @@ function runOpenresty() {
     
     # 
     # /usr/local/openresty/bin/openresty -c /opt/nginx/conf/nginx.conf -g 'daemon off;'
-
     #
-    cp /etc/supervisord.d/openresty.ini.bak /etc/supervisord.d/openresty.ini
+    cp ${SUPERVISORD_CONF_PATH}/supervisord.conf.bak ${SUPERVISORD_CONF_PATH}/supervisord.conf
     #
-    /usr/bin/supervisord -c /etc/supervisord.conf -n
+    cp ${SUPERVISORD_CONF_D_PATH}/openresty.ini.bak ${SUPERVISORD_CONF_D_PATH}/openresty.ini
+    #
+    /usr/bin/supervisord -c ${SUPERVISORD_CONF_PATH}/supervisord.conf -n
 
 }
 
@@ -335,11 +356,12 @@ function runTomcat() {
 
     #
     # /opt/tomcat/bin/catalina.sh ${CATALINA_SH_ARGS:-run}
-
     #
-    cp /etc/supervisord.d/tomcat.ini.bak /etc/supervisord.d/tomcat.ini
+    cp ${SUPERVISORD_CONF_PATH}/supervisord.conf.bak ${SUPERVISORD_CONF_PATH}/supervisord.conf
     #
-    /usr/bin/supervisord -c /etc/supervisord.conf -n
+    cp ${SUPERVISORD_CONF_D_PATH}/tomcat.ini.bak ${SUPERVISORD_CONF_D_PATH}/tomcat.ini
+    #
+    /usr/bin/supervisord -c ${SUPERVISORD_CONF_PATH}/supervisord.conf -n
 
 }
 
@@ -350,14 +372,17 @@ function runApp() {
     configureApp
     configureSupervisor
 
-    if [ ${FAIL_RUN_DIST_JAR} != 1 ]; then
+    if [ "${FAIL_RUN_DIST_APP}" == "" ]; then
         #
         # exec java ${DIST_JAR_ARGS}
-
         #
-        cp /etc/supervisord.d/app.ini.bak /etc/supervisord.d/app.ini
+        cp ${SUPERVISORD_CONF_PATH}/supervisord.conf.bak ${SUPERVISORD_CONF_PATH}/supervisord.conf
         #
-        /usr/bin/supervisord -c /etc/supervisord.conf -n
+        cp ${SUPERVISORD_CONF_D_PATH}/app.ini.bak ${SUPERVISORD_CONF_D_PATH}/app.ini
+        #
+        /usr/bin/supervisord -c ${SUPERVISORD_CONF_PATH}/supervisord.conf -n
+    else 
+        log "runApp Failure! Cause By: ${FAIL_RUN_DIST_APP}"
     fi
 
 }
@@ -369,13 +394,13 @@ function runShell() {
 }
 
 function main() {
-    # SWITCH_RUN 取值 auto dist_jar tomcat none
+    # SWITCH_RUN 取值 bash init ps nginx app tomcat
     # 未发现DIST_JAR变量的jar文件，则直接运行tomcat 0 不运行
     SWITCH_RUN=${SWITCH_RUN:-"bash"}
     log "================================================================================"
     log "SWITCH_RUN=$SWITCH_RUN"
 
-    if [ "${SWITCH_RUN}" == "bash" ] || [ "${SWITCH_RUN}" == "bash" ] ; then
+    if [ "${SWITCH_RUN}" == "BASH" ] || [ "${SWITCH_RUN}" == "bash" ] ; then
         runShell $@
     fi
 
